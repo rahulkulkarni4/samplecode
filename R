@@ -1,0 +1,248 @@
+library(sf)
+library(tmap)
+library(tidyverse)
+
+setwd("~")
+
+df_demo <- read_csv('ReferenceCCAProfiles20142018.csv')
+
+df_demo <- df_demo %>% select(GEOG, TOT_POP, HISP, BLACK)
+df_demo$PCT_BLACK <- (df_demo$BLACK/df_demo$TOT_POP)*100
+df_demo$PCT_HISP <- (df_demo$HISP/df_demo$TOT_POP)*100
+
+df_demo$blk_hisp <- df_demo$PCT_BLACK+df_demo$PCT_HISP
+
+# write_csv(df_demo, 'demographics.csv')
+
+df_health <- read_csv('Public_Health_Statistics-_Selected_public_health_indicators_by_Chicago_community_area.csv')
+df_health <- df_health %>% 
+  select(`Community Area Name`, `Low Birth Weight`, `Birth Rate`, `Lung Cancer`, Tuberculosis, `Per Capita Income`)
+
+df_demo_health <- df_demo %>% full_join(df_health, by = c("GEOG" = "Community Area Name")) 
+
+df_asthma <- read_csv('Chicago Health Atlas Data Download - Adult asthma rate in Community areas.csv')
+df_asthma <- df_asthma %>% rename("PCT_ASTHMA" = "HCSATHP_2016-2018")
+df_asthma <- df_asthma %>% select(Name, PCT_ASTHMA)
+
+df_final <- df_demo_health %>% full_join(df_asthma, by = c("GEOG" = "Name")) 
+# dropping the last NA row
+df_final <- df_final[-c(78),]
+
+# write_csv(df_final, 'final.csv')
+# Landfill locations
+landf_locs <- read_csv("CDPH_Environmental_Permits.csv")
+landf_locs <- landf_locs %>% filter(`APPLICATION TYPE` == "WASTE HANDLING FACILITY")
+landf_locs <- landf_locs %>% filter(STATUS %in% c("APPROVED / ISSUED", "APPROVED / AMENDED", "APPROVED / REVISED", "OPEN"))
+
+landf_locs <- landf_locs %>% select(LOCATION)
+
+landf_locs <- landf_locs %>% drop_na()
+# write_csv(landf_locs, 'locs.csv')
+
+landf_sf <- st_as_sf(landf_locs, wkt = "LOCATION", crs = 4326)
+# plot(landf_sf)
+# st_write(landf_sf, 'landfsf.shp')
+commareas <- st_read("ChiComArea.shp")
+tm_shape(commareas) + tm_borders() +
+  tm_shape(landf_sf) + tm_dots(size = 0.2)
+
+# st_crs(commareas)
+# st_crs(landf_sf)
+
+# changing crs projection for better measurement of feet
+new_crs <- st_crs("EPSG:3435")
+
+landf_sf <- st_transform(landf_sf,new_crs)
+commareas <- st_transform(commareas,new_crs)
+
+tm_shape(commareas) + tm_borders(alpha = 0.4) + 
+ tm_text('community', size = 0.3) +
+  tm_shape(landf_sf) + tm_dots(size = 0.2, col = "green")
+
+# creating 1 mile buffers
+landf_buffer <- st_buffer(landf_sf, dist = 5280)
+
+tm_shape(commareas) + tm_borders(alpha = 0.5) + 
+  tm_shape(landf_buffer) + 
+  tm_fill(col = "blue", alpha = .4) + 
+  tm_borders(alpha=0.6) +
+  tm_shape(landf_sf) + tm_dots(size = 0.1, col = "red")
+
+
+mycols <- c("#dce775", "#cddc39", "#afb42b", "#827717")
+
+tm_shape(commareas_demo) +  tm_borders(alpha = 0.4) + 
+  tm_fill('blk_hisp', palette = mycols, style = 'quantile', n = 4, title = "Demographic ( % )") +
+  tm_shape(landf_sf) + 
+  tm_dots(size = 0.1, col = "deeppink4") +
+  tm_shape(landf_buffer) + 
+  tm_fill(col = "khaki3", alpha = .4) + 
+  tm_borders(alpha=0.6) +
+  # tm_shape(landf_sf) + tm_dots(size = 0.1, col = "red")
+  tm_legend(legend.position = c("left", "bottom")) +
+  tm_layout(title = "Black & Hispanic Populations in Chicago Community Areas",
+            title.size = .6,
+            title.position = c("center", "top"), 
+            inner.margins = c(0.2, 0.2, 0.1, 0.3)) + 
+  tm_scale_bar() +
+  tm_credits('Created by Rahul Kulkarni (2021). \nData from CMAP.', position = c('right', 'bottom'), size = 0.5)
+
+
+# counting buffers per community area
+pip<- st_join(landf_buffer, commareas)
+# head(pip)
+buffer_count <- as.data.frame(table(pip$community))
+# glimpse(landfills_in_count)
+
+buffer_count <- buffer_count %>% rename('community' = 'Var1')
+
+commareas_buffer <- merge(commareas, buffer_count, by="community")
+# glimpse(commareas)
+
+tm_shape(commareas_buffer) + 
+  tm_borders(alpha = 0.5) +
+  tm_fill("Freq", palette = "BuPu", style = "cat", title = 'Buffer Count') +
+  tm_legend(legend.position = c("left", "bottom")) +
+  tm_layout(title = "Count of Buffers per Chicago Community Area",
+            title.size = .8,
+            title.position = c("center", "top"), 
+            inner.margins = c(0.2, 0.1, 0.1, 0.4)) + 
+  tm_scale_bar() +
+  tm_credits('Created by Rahul Kulkarni (2021). \nData from Chicago Data Portal.', position = c('right', 'bottom'), size = 0.5)
+  # tm_shape(landf_buffer) +   
+  # tm_fill(col = "burlywood4", alpha = .4) + 
+  # tm_borders(alpha=0.6) +
+  # tm_shape(landf_sf) + tm_dots(size = 0.1, col = "red")
+
+# Counting landfills per community area
+pip <- st_join(landf_sf, commareas)
+# head(pip)
+landfills_in_count <- as.data.frame(table(pip$community))
+# glimpse(landfills_in_count)
+
+landfills_in_count <- landfills_in_count %>% rename('community' = 'Var1')
+
+commareas_landfills <- merge(commareas, landfills_in_count, by="community")
+# glimpse(commareas)
+
+#######################################
+tm_shape(commareas_landfills) + 
+  tm_borders(alpha = 0.5) +
+  tm_fill("Freq", palette = "BuPu", style = "cat", title = 'No. of Facilities') +
+  tm_legend(legend.position = c("left", "bottom")) +
+  tm_layout(title = "Waste Handling Facilities by Chicago Community Area",
+            title.size = .8,
+            title.position = c("center", "top"), 
+            inner.margins = c(0.2, 0.1, 0.1, 0.4)) + 
+  tm_scale_bar() +
+  tm_credits('Created by Rahul Kulkarni (2021). \nData from Chicago Data Portal.', position = c('right', 'bottom'), size = 0.5)
+#######################################
+
+# merging for other indicators (demographics + health)
+df_final$community <- str_to_upper(df_final$GEOG)
+df_final$PCT_ASTHMA <- as.numeric(as.character(df_final$PCT_ASTHMA))
+df_final$PCT_ASTHMA <- df_final$PCT_ASTHMA %>% replace_na(0)
+commareas_demo <- merge(commareas, df_final, by='community')
+
+
+# Asthma
+tm_shape(commareas_demo) + 
+  tm_borders(alpha = 0.4) + 
+  tm_fill('PCT_ASTHMA', palette = 'Greys', style = 'jenks', n = 5, title = 'Asthma (%)', colorNA = 'bisque3', textNA = 'Data unavailable') + 
+  tm_shape(landf_sf) + 
+  tm_dots(size = 0.1, col = "burlywood4") +
+  tm_legend(legend.position = c("left", "bottom")) +
+  tm_layout(title = "Adult Asthma Rate by Chicago Community Area",
+            title.size = .6,
+            title.position = c("center", "top"), 
+            inner.margins = c(0.25, 0.2, 0.1, 0.25)) + 
+  tm_scale_bar() +
+  tm_credits('Created by Rahul Kulkarni (2021). \nData from Chicago Health Atlas.', position = c('right', 'bottom'), size = 0.5)
+
+# Birth weight
+tm_shape(commareas_demo) + 
+  tm_fill('Low Birth Weight', palette = 'PuRd', style = 'jenks', n = 5, title = 'Low Birth Weight (%)') + 
+  tm_borders(alpha = 0.4) +
+  tm_shape(landf_sf) +
+  tm_dots(size = 0.1, col = "darkorchid4") +
+  tm_legend(legend.position = c("left", "bottom")) +
+  tm_layout(title = "Percent of babies with Low Birth Weight \nby Chicago Community Area",
+            title.size = .6,
+            title.position = c("center", "top"), 
+            inner.margins = c(0.25, 0.2, 0.1, 0.25)) + 
+  tm_scale_bar() +
+  tm_credits('Created by Rahul Kulkarni (2021). \nData from Chicago Data Portal.', position = c('right', 'bottom'), size = 0.5)
+
+# income
+tm_shape(commareas_demo) + tm_borders(alpha = 0.4) + 
+  tm_fill('Per Capita Income', palette = 'Blues', style = 'quantile', n = 5) + 
+  tm_shape(landf_sf) +
+  tm_dots(size = 0.1, col = "dodgerblue") +
+  tm_legend(legend.position = c("left", "bottom")) +
+  tm_layout(title = "Per Capita Income by Chicago Community Area",
+            title.size = .6,
+            title.position = c("center", "top"), 
+            inner.margins = c(0.2, 0.25, 0.15, 0.2)) + 
+  tm_scale_bar() +
+  tm_credits('Created by Rahul Kulkarni (2021). \nData from CMAP.', position = c('right', 'bottom'), size = 0.5)
+
+# lung cancer map
+tm_shape(commareas_demo) + 
+  tm_borders(alpha = 0.4) + 
+  tm_fill('Lung Cancer', palette = 'Greys', style = 'jenks', n = 5,title = 'Lung Cancer (%)') + 
+  tm_shape(landf_sf) + 
+  tm_dots(size = 0.1, col = "burlywood4") +
+  tm_legend(legend.position = c("left", "bottom")) +
+  tm_layout(title = "Lung Cancer (%) by Chicago Community Area",
+            title.size = .6,
+            title.position = c("center", "top"), 
+            inner.margins = c(0.3, 0.2, 0.1, 0.25)) + 
+  tm_scale_bar() +
+  tm_credits('Created by Rahul Kulkarni (2021). \nData from Chicago Data Portal.', position = c('right', 'bottom'), size = 0.5)
+
+# low birth weight
+tm_shape(commareas_demo) + 
+  tm_borders(alpha = 0.4) + 
+  tm_fill('Low Birth Weight', palette = 'PuRd', style = 'jenks', n = 4) + 
+  tm_shape(landf_sf) + 
+  tm_dots(size = 0.1, col = "darkseagreen4") +
+  tm_legend(legend.position = c("left", "bottom")) +
+  tm_layout(title = "Low Birth Weight Percentage\nChicago Community Areas",
+            title.size = .6,
+            title.position = c("right", "top"), 
+            inner.margins = c(0.3, 0.2, 0.2, 0.3)) + 
+  tm_scale_bar() +
+  tm_credits('Created by Rahul Kulkarni \n(2021). \nData from Chicago Data Portal.', position = c('right', 'bottom'), size = 0.5)
+
+
+# demographics
+mycols <- c("#dce775", "#cddc39", "#afb42b", "#827717")
+tm_shape(commareas_demo) +  tm_borders(alpha = 0.4) + 
+  tm_fill('blk_hisp', palette = mycols, style = 'quantile', n = 4, title = "Demographic ( % )") +
+  tm_shape(landf_sf) + 
+  tm_dots(size = 0.1, col = "darkslategrey") +
+  tm_legend(legend.position = c("left", "bottom")) +
+  tm_layout(title = "Black & Hispanic Populations in Chicago Community Areas",
+            title.size = .6,
+            title.position = c("center", "top"), 
+            inner.margins = c(0.2, 0.2, 0.1, 0.3)) + 
+  tm_scale_bar() +
+  tm_credits('Created by Rahul Kulkarni (2021). \nData from CMAP.', position = c('right', 'bottom'), size = 0.5)
+
+# Tuberculosis
+tm_shape(commareas_demo) + 
+  tm_borders(alpha = 0.4) + 
+  tm_fill('Tuberculosis', palette = 'Greys', style = 'jenks', n = 5, title = 'Percentage of TB cases') + 
+  tm_shape(landf_sf) + 
+  tm_dots(size = 0.1, col = "burlywood4") +
+  tm_legend(legend.position = c("left", "bottom")) +
+  tm_layout(title = "Tuberculosis cases by Chicago Community Area",
+            title.size = .6,
+            title.position = c("center", "top"), 
+            inner.margins = c(0.3, 0.2, 0.1, 0.25)) + 
+  tm_scale_bar() +
+  tm_credits('Created by Rahul Kulkarni (2021). \nData from Chicago Data Portal.', position = c('right', 'bottom'), size = 0.5)
+
+mean(df_final)
+mean_values <- df_final %>% summarise(across(everything(), mean))
+neighborhoods <- df_final %>% filter(GEOG == 'McKinley Park' | GEOG == 'New City')
