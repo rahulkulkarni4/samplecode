@@ -1,0 +1,211 @@
+import pandas as pd
+import os
+import random
+from pandas_datareader import wb
+import pandasdmx
+import seaborn as sns
+import statsmodels.formula.api as smf
+
+pd.set_option('display.float_format', lambda x: '%.2f' % x)
+
+def import_wb(indicator):
+    """
+    this function scrapes the world bank website and returns the gdps 
+    of the countries. we also need to perform merging with get_countries()
+    method to get the country name in addition to country code
+    input: indicator of which data to download
+    output: dataframe (also saved to CSV on desktop) with year, gdp, country code
+    and country name
+    """
+    df = wb.download(indicator=indicator, country='all', start=1990, end=2018)
+    df = df.reset_index()
+    df_country_code = wb.get_countries()
+    df_country_code = df_country_code[['iso3c', 'name']]
+    df_merged = df.merge(df_country_code, left_on = 'country', right_on = 'name')
+    df_merged = df_merged.drop(columns = ['name'])
+    df_merged = df_merged.rename(columns = {'NY.GDP.MKTP.CD' : 'gdp'})
+    return df_merged
+
+def import_oecd(res_id, import_key):
+    """
+    use documentation: https://pandas-datareader.readthedocs.io/en/latest/remote_data.html#oecd
+    to extract OECD data on waste generation and recovery pct by country
+    """
+    oecd_waste = pandasdmx.Request('OECD').data(resource_id = res_id,
+                                             key = import_key).write()
+    # Source: https://stackoverflow.com/questions/56895494/most-efficient-way-of-converting-restful-output-to-dataframe
+    df_oecd_waste = pd.DataFrame(oecd_waste)
+    df_oecd_waste = df_oecd_waste.reset_index()
+    return df_oecd_waste
+
+def check_and_save(d_type, fname):
+    """
+    this function checks whether the path exists; if it does, it simply reads
+    the saved csv and returns it. if not, based on the parameters specified,
+    it downloads oecd and world bank data, stores it in user's
+    current working directory, and returns the dataframe
+    """
+    path = os.path.join(os.getcwd(), fname)
+    try:
+        if (os.path.exists(path)):
+            df = pd.read_csv(path, index_col = 0)
+            # Source: https://stackoverflow.com/questions/36519086/how-to-get-rid-of-unnamed-0-column-in-a-pandas-dataframe
+        # to change year, change the 'startTime' and 'endTime' parameters in key
+        # more documentation in research findings report
+        else:
+            if d_type == 'wb':
+                df = import_wb('NY.GDP.MKTP.CD')
+            elif d_type == 'oecd_mun':
+                df = import_oecd('MUNW', 
+                               'AUS+AUT+BEL+CAN+CHL+COL+CZE+DNK+EST+FIN+FRA+DEU+GRC+HUN+ISL+IRL+ISR+ITA+JPN+KOR+LVA+LTU+LUX+MEX+NLD+NZL+NOR+POL+PRT+SVK+SVN+ESP+SWE+CHE+TUR+GBR+USA+OECDAO+OECDE+OECD+NMEC+BRA+CHN+CRI+IND+IDN+RUS+OECDAM.MUNICIPAL+ORIGIN+HOUSEHOLD+OTHMUN+TYPE+HOUSE_LIKE+BULKY+WEEE+TREATMENT+RECOVERY+RECYCLING+COMPOST+INCINERATION_WITH+OTH_RECOV+DISPOSAL+INCINERATION_WITHOUT+LANDFILL+OTH_DISP+INCINERATION+MW_INT+MW_CAP+MW_INDEX+INDEX1990+INDEX2000+TREAT_SHARE+RECOV_SHARE+MAT_RECOV_SHARE+RECYCLING_SHARE+COMPST_SHARE+INC_WITH_SHARE+DISP_SHARE+INC_WITHOUT_SHARE+LANDF_SHARE+INC_SHARE/all?startTime=1990&endTime=2018')
+            elif d_type == 'oecd_sng_exp':
+                df = import_oecd('SNGF',
+                               'S13+S1312_1313+S1313.TLYCG+TYPE_EXP+D1+P2+D62_D6311_D63121_D63131+D3_D7+P5_K2_D9+D5_D29_D8_D4.VALUE+PER_CAP+GDP_SH+S13_SH.FED+AUS+AUT+BEL+CAN+DEU+MEX+ESP+CHE+USA+OECD9+OECD9_UWA+UNI+CHL+CZE+DNK+EST+FIN+FRA+GRC+HUN+ISL+IRL+ISR+ITA+JPN+KOR+LVA+LUX+NLD+NZL+NOR+POL+PRT+SVK+SVN+SWE+TUR+GBR+OECD26+OECD26_UWA+OECD35+OECD35_UWA+EU28/all?startTime=2016&endTime=2016')
+            elif d_type == 'oecd_sng_rev':
+                df = import_oecd('SNGF',
+                               'S1312_1313+S1313+S13.GTR+TYPE_REV.VALUE+PER_CAP+GDP_SH+TRANSAC_SH+S13_SH.FED+AUS+AUT+BEL+CAN+DEU+MEX+ESP+CHE+USA+OECD9+OECD9_UWA+UNI+CHL+CZE+DNK+EST+FIN+FRA+GRC+HUN+ISL+IRL+ISR+ITA+JPN+KOR+LVA+LUX+NLD+NZL+NOR+POL+PRT+SVK+SVN+SWE+TUR+GBR+OECD26+OECD26_UWA+OECD35+OECD35_UWA+EU28/all?startTime=2016&endTime=2016')
+            df.to_csv(path)
+    except ConnectionError: #JL: good use of exception handling for one specific error. this can also be a good spot to print out some relevant parameters that failed (d_type, fname)
+        print('There seems to be a connection error with the API adapter. Please try again in some time!')
+        df = []
+    return df
+
+def clean_waste_data(waste_df, var_type, renamed_col):
+    """
+    cleans waste data, keeps only the relevant variable type and renames
+    the value column to that measure
+    """
+    cleaned_waste = waste_df[waste_df['VAR'] == var_type]
+    cleaned_waste = cleaned_waste.rename(columns = {'value': renamed_col})
+    cleaned_waste = cleaned_waste.drop(columns = ['VAR'])     
+    return cleaned_waste
+
+def clean_sng_data(sng_df, sec, measure, drop_list, new_col_name):
+    """
+    we are looking for code S1312_1313 (subnational govt sector), 
+    and GDP_SH (pct of gdp) for our purposes. Codes are same for revenue and expenditure
+    this function scrapes the OECD website for subnational expenditure
+    Data Source: https://stats.oecd.org/Index.aspx?DataSetCode=SNGF
+    """
+    sng_df = sng_df[sng_df['SEC'] == sec]
+    sng_df = sng_df[sng_df['MEAS'] == measure]
+    sng_df = sng_df.drop(columns = drop_list)
+    sng_df = sng_df.rename(columns = {'value': new_col_name})
+    return sng_df
+
+def filter_rowvals(in_df, col_name, list_vals):
+    """
+    keeps only rows with certain values (useful for a lot of applications
+    in this code)
+    """
+    out_df = in_df.loc[in_df[col_name].isin(list_vals)]
+    return out_df
+
+def import_and_clean():
+    """
+    imports, saves, and cleans data from all sources by calling on different
+    functions. Outputs waste and gdp panel data and subnational government
+    cross-sectional data, ready for plotting
+    """
+    df_wb = check_and_save('wb', 'worldbank.csv')
+    df_waste = check_and_save('oecd_mun', 'oecd_waste.csv')
+    oecd_exp = check_and_save('oecd_sng_exp', 'oecd_sng_exp.csv')
+    oecd_rev = check_and_save('oecd_sng_rev', 'oecd_sng_rev.csv')
+    # from codebook, codes for recovery as pct of waste, per capita waste generation,
+    # and share of waste going to landfill
+    df_waste = filter_rowvals(df_waste, 'VAR', ['MAT_RECOV_SHARE', 'MW_CAP', 'LANDF_SHARE'])
+    
+    df_genpercap = clean_waste_data(df_waste, 'MW_CAP', 'waste_per_capita')
+    df_recovery = clean_waste_data(df_waste,'MAT_RECOV_SHARE', 'pct_recovery')
+    waste_merged = df_genpercap.merge(df_recovery, on = ['TIME_PERIOD','COU'])
+    df_landfill = clean_waste_data(df_waste, 'LANDF_SHARE', 'pct_landfill')
+    all_waste = waste_merged.merge(df_landfill, on = ['TIME_PERIOD', 'COU'])
+    
+    gdp_waste = df_wb.merge(all_waste, left_on = ['year','iso3c'], right_on = ['TIME_PERIOD','COU'])
+    gdp_waste = gdp_waste[['year','COU', 'country', 'gdp', 'waste_per_capita', 'pct_recovery', 'pct_landfill']]
+    
+    df_sng_exp = clean_sng_data(oecd_exp,
+                                  'S1312_1313', 
+                                  'GDP_SH', 
+                                  ['SEC', 'TRANS', 'MEAS', 'TIME_PERIOD'],
+                                  'sng_exp')
+    df_sng_rev = clean_sng_data(oecd_rev,
+                                  'S1312_1313',
+                                  'GDP_SH',
+                                  ['SEC', 'TRANS', 'MEAS', 'TIME_PERIOD'],
+                                  'sng_rev')
+    """
+    following instructions from Q88 on Piazza; creating the following
+    two csvs for interactive plotting
+    """
+    df_waste.to_csv(os.path.join(os.getcwd(), 'waste_for_plotting.csv'))
+    df_wb.to_csv(os.path.join(os.getcwd(), 'wb_for_plotting.csv'))
+    sng_16 = df_sng_exp.merge(df_sng_rev, on = 'COU')
+    sng_16 = filter_rowvals(sng_16, 'COU', gdp_waste['COU'].unique())
+    return gdp_waste, sng_16
+
+def output_csv(waste_gdp, sng):
+    """
+    this function saves the manipulated dataframes
+    in csv in user's working directory (also included in the repo)
+    this output csv will be used in jupyter notebook for an interactive plot
+    """
+    path_waste = os.path.join(os.getcwd(), 'output_waste.csv')
+    path_sng = os.path.join(os.getcwd(), 'output_sng.csv')
+    if (os.path.exists(path_waste)):
+        pass
+    else:
+         waste_gdp.to_csv(path_waste)
+    if (os.path.exists(path_sng)):
+        pass
+    else:
+        sng.to_csv(path_sng)
+  
+def run_regression(df, y_and_x):
+    model = smf.ols(y_and_x, data=df)
+    results = model.fit()
+    return results.summary()
+
+def plot_regression(x_val, y_val, in_df, p_fname):
+    """
+    plots regression and saves it in output folder as png file
+    the color of best fit line is randomly generated from the sns color
+    palette
+    """
+    color_palette = list(sns.color_palette())
+    col = random.sample(color_palette, 1)
+    plot = sns.lmplot(x=x_val, y=y_val, data=in_df, 
+                line_kws={"color":col[0],"alpha":0.7,"lw":5});
+    plot.savefig(os.path.join(os.getcwd(), p_fname))
+
+def summarize_and_display():
+    """
+    imports clean data, summarizes it through a regression, and outputs
+    dictionary of summaries
+    """
+    i = 0
+    dict_models = {}  
+    waste_data, sng_data = import_and_clean()
+    waste_data[['year']] = waste_data[['year']].apply(pd.to_numeric)
+    waste_16 = waste_data[waste_data['year'] == 2016]
+    sng_merged = waste_16.merge(sng_data, on = 'COU')
+    
+    models_list = [run_regression(waste_data, 'pct_recovery ~ gdp'),
+                   run_regression(waste_data, 'pct_landfill ~ gdp'),
+                   run_regression(sng_merged, 'pct_recovery ~ sng_exp'),
+                   run_regression(sng_merged, 'pct_recovery ~ sng_rev')]
+    
+    for reg_type in ['recov_gdp', 'landfill_gdp', 'recov_exp', 'recov_rev']: #JL: instead of manually creating and cycling "i" here, use enumerate
+        dict_models[reg_type] = models_list[i]
+        i+=1
+    
+    # display
+    print(dict_models.values())
+    
+    plot_regression('gdp', 'pct_recovery', waste_data, 'recov_gdp.png')
+    plot_regression('gdp', 'pct_landfill', waste_data, 'landfill_gdp.png')
+    plot_regression('sng_exp', 'pct_recovery', sng_merged, 'recov_exp.png')
+    plot_regression('sng_rev', 'pct_recovery', sng_merged, 'recov_rev.png')
+    output_csv(waste_data, sng_data)
+    
+summarize_and_display()
